@@ -31,6 +31,7 @@
     const AlertCircleIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>;
     const ArrowRightLeftIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>;
     const CheckIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+    const SearchIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>;
 
     // --- Utility Functions ---
     const extractTags = (node, result = {}) => {
@@ -171,6 +172,9 @@
         ignoreTags: false,
       });
 
+      const [tagSearch, setTagSearch] = useState('');
+      const [tagSort, setTagSort] = useState({ key: 'status', direction: 'asc' });
+
       useEffect(() => {
         try { setParsed1(input1 ? JSON.parse(input1) : null); setError1(null); } 
         catch (e) { setError1(e.message); setParsed1(null); }
@@ -182,7 +186,7 @@
       }, [input2]);
 
       const { 
-        filtered1, filtered2, tags1, tags2, allControlNamesForTags, 
+        filtered1, filtered2, tags1, tags2, allControlNamesForTags, rawFlatTags,
         flatControls1, flatControls2, controlOverview 
       } = useMemo(() => {
         const f1 = parsed1 ? filterJSON(parsed1, settings) : null;
@@ -192,6 +196,19 @@
         const t1 = parsed1 ? extractTags(parsed1) : {};
         const t2 = parsed2 ? extractTags(parsed2) : {};
         const controlNamesForTags = Array.from(new Set([...Object.keys(t1), ...Object.keys(t2)])).sort();
+
+        const flatTags = [];
+        for (const name of controlNamesForTags) {
+          const t1Arr = t1[name] || [];
+          const t2Arr = t2[name] || [];
+          const uniqueTags = Array.from(new Set([...t1Arr, ...t2Arr]));
+          for (const tag of uniqueTags) {
+            let status = 'unchanged';
+            if (t1Arr.includes(tag) && !t2Arr.includes(tag)) status = 'removed';
+            else if (!t1Arr.includes(tag) && t2Arr.includes(tag)) status = 'added';
+            flatTags.push({ controlName: name, tag, status });
+          }
+        }
 
         // Control Flattener Overview
         const flat1 = f1 ? extractControls(f1) : {};
@@ -210,10 +227,50 @@
 
         return { 
           filtered1: f1, filtered2: f2, 
-          tags1: t1, tags2: t2, allControlNamesForTags: controlNamesForTags,
+          tags1: t1, tags2: t2, allControlNamesForTags: controlNamesForTags, rawFlatTags: flatTags,
           flatControls1: flat1, flatControls2: flat2, controlOverview: overview
         };
       }, [parsed1, parsed2, settings]);
+
+      const processedTags = useMemo(() => {
+        let result = [...(rawFlatTags || [])];
+        
+        if (tagSearch.trim()) {
+          const q = tagSearch.toLowerCase();
+          result = result.filter(item => 
+            item.tag.toLowerCase().includes(q) || 
+            item.controlName.toLowerCase().includes(q)
+          );
+        }
+
+        result.sort((a, b) => {
+          let valA = a[tagSort.key];
+          let valB = b[tagSort.key];
+
+          if (tagSort.key === 'status') {
+            // Sort custom weights so status clumps logically
+            const weights = { added: 1, removed: 2, unchanged: 3 };
+            valA = weights[a.status];
+            valB = weights[b.status];
+          } else {
+            valA = valA.toLowerCase();
+            valB = valB.toLowerCase();
+          }
+
+          if (valA < valB) return tagSort.direction === 'asc' ? -1 : 1;
+          if (valA > valB) return tagSort.direction === 'asc' ? 1 : -1;
+          return 0;
+        });
+
+        return result;
+      }, [rawFlatTags, tagSearch, tagSort]);
+
+      const handleTagSort = (key) => {
+        setTagSort(prev => ({
+          key,
+          direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+        }));
+      };
 
       const toggleSetting = (key) => setSettings(prev => ({ ...prev, [key]: !prev[key] }));
 
@@ -332,55 +389,78 @@
 
             {/* VIEW: TAG OVERVIEW */}
             {activeTab === 'tags' && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex-1">
-                <div className="overflow-auto h-full">
+              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex-1 flex flex-col">
+                <div className="p-4 border-b bg-gray-50 flex gap-4 items-center justify-between flex-wrap">
+                  <div className="relative flex-1 max-w-md">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
+                      <SearchIcon />
+                    </div>
+                    <input
+                      type="text"
+                      className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 sm:text-sm transition-colors"
+                      placeholder="Search tags or control names..."
+                      value={tagSearch}
+                      onChange={(e) => setTagSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="text-sm text-gray-500 font-medium">
+                    {processedTags.length} tags found
+                  </div>
+                </div>
+                <div className="overflow-auto flex-1 bg-white">
                   <table className="w-full text-sm text-left border-collapse">
-                    <thead className="bg-white sticky top-0 shadow-sm text-gray-700 border-b">
+                    <thead className="bg-white sticky top-0 shadow-sm text-gray-700 border-b z-10">
                       <tr>
-                        <th className="px-6 py-4 font-semibold w-1/3 border-r">Control Name</th>
-                        <th className="px-6 py-4 font-semibold w-1/3 border-r bg-red-50/30">JSON 1 Tags</th>
-                        <th className="px-6 py-4 font-semibold w-1/3 bg-green-50/30">JSON 2 Tags</th>
+                        <th 
+                          className="px-6 py-4 font-semibold w-1/3 cursor-pointer hover:bg-gray-50 transition-colors group select-none"
+                          onClick={() => handleTagSort('controlName')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Control Name
+                            <span className="text-gray-400 group-hover:text-gray-600">
+                              {tagSort.key === 'controlName' ? (tagSort.direction === 'asc' ? '↑' : '↓') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 font-semibold w-1/3 cursor-pointer hover:bg-gray-50 transition-colors group select-none"
+                          onClick={() => handleTagSort('tag')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Tag
+                            <span className="text-gray-400 group-hover:text-gray-600">
+                              {tagSort.key === 'tag' ? (tagSort.direction === 'asc' ? '↑' : '↓') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th 
+                          className="px-6 py-4 font-semibold w-1/3 cursor-pointer hover:bg-gray-50 transition-colors group select-none"
+                          onClick={() => handleTagSort('status')}
+                        >
+                          <div className="flex items-center gap-2">
+                            Status
+                            <span className="text-gray-400 group-hover:text-gray-600">
+                              {tagSort.key === 'status' ? (tagSort.direction === 'asc' ? '↑' : '↓') : '↕'}
+                            </span>
+                          </div>
+                        </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {allControlNamesForTags.length === 0 ? (
-                        <tr><td colSpan="3" className="px-6 py-12 text-center text-gray-500 italic">No controls with tags found.</td></tr>
+                      {processedTags.length === 0 ? (
+                        <tr><td colSpan="3" className="px-6 py-12 text-center text-gray-500 italic">No tags matching your search.</td></tr>
                       ) : (
-                        allControlNamesForTags.map(name => {
-                          const t1 = tags1[name] || [];
-                          const t2 = tags2[name] || [];
-                          const t1HasData = t1.length > 0;
-                          const t2HasData = t2.length > 0;
-
-                          return (
-                            <tr key={name} className="hover:bg-gray-50/50 transition-colors group">
-                              <td className="px-6 py-4 border-r border-gray-200 font-mono font-medium text-gray-800">{name}</td>
-                              <td className="px-6 py-4 border-r border-gray-200 align-top">
-                                {t1HasData ? (
-                                  <div className="flex flex-wrap gap-2">
-                                    {t1.map(tag => (
-                                      <span key={tag} className={`px-2.5 py-1 rounded-md text-xs font-mono border ${!t2.includes(tag) ? 'bg-red-50 text-red-700 border-red-200 line-through opacity-70' : 'bg-gray-100 text-gray-700 border-gray-200'}`}>{tag}</span>
-                                    ))}
-                                  </div>
-                                ) : <span className="text-gray-400 italic text-xs">No tags</span>}
-                              </td>
-                              <td className="px-6 py-4 align-top">
-                                 {t2HasData ? (
-                                  <div className="flex flex-wrap gap-2">
-                                    {t2.map(tag => {
-                                      const isNew = !t1.includes(tag);
-                                      return (
-                                        <span key={tag} className={`px-2.5 py-1 rounded-md text-xs font-mono border ${isNew ? 'bg-green-100 text-green-800 border-green-300 font-semibold shadow-sm' : 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-                                          {isNew && <span className="mr-1">+</span>}{tag}
-                                        </span>
-                                      );
-                                    })}
-                                  </div>
-                                ) : <span className="text-gray-400 italic text-xs">No tags</span>}
-                              </td>
-                            </tr>
-                          );
-                        })
+                        processedTags.map((item, idx) => (
+                          <tr key={`${item.controlName}-${item.tag}-${idx}`} className="hover:bg-gray-50/50 transition-colors group">
+                            <td className="px-6 py-4 font-mono font-medium text-gray-800">{item.controlName}</td>
+                            <td className="px-6 py-4 font-mono text-gray-600">{item.tag}</td>
+                            <td className="px-6 py-4">
+                              {item.status === 'added' && <span className="inline-block bg-green-100 text-green-800 px-2.5 py-1 rounded-md text-xs font-bold border border-green-200">+ Added</span>}
+                              {item.status === 'removed' && <span className="inline-block bg-red-50 text-red-700 px-2.5 py-1 rounded-md text-xs font-bold border border-red-200 line-through">- Removed</span>}
+                              {item.status === 'unchanged' && <span className="inline-block bg-gray-100 text-gray-600 px-2.5 py-1 rounded-md text-xs font-medium border border-gray-200">Unchanged</span>}
+                            </td>
+                          </tr>
+                        ))
                       )}
                     </tbody>
                   </table>
